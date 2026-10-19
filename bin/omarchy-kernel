@@ -151,7 +151,6 @@ set_kernel() {
   else
     # Picked from the menu there is no terminal, so polkit asks on screen, once,
     # for the boot order and the rebuild together.
-    omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.switching "$kernel")"
     if pkexec "$self" set "$kernel"; then
       omarchy-state set reboot-required
       omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.switched "$kernel")"

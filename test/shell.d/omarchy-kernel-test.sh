@@ -97,7 +97,7 @@ reset_fixture
 grep -Fxq "pkexec $ROOT/bin/omarchy-kernel set linux-omarchy" "$CALL_LOG" || fail "pkexec runs this command's root half" "$(<"$CALL_LOG")"
 ! grep -q '^sudo ' "$CALL_LOG" || fail "the menu path has no terminal for sudo"
 grep -Fxq 'omarchy-state set reboot-required' "$CALL_LOG" || fail "a switch asks for a reboot"
-[[ $(grep -c '^omarchy-notification-send ' "$CALL_LOG") == "2" ]] || fail "the switch announces its start and finish" "$(<"$CALL_LOG")"
+[[ $(grep -c '^omarchy-notification-send ' "$CALL_LOG") == "1" ]] || fail "only the finished switch is announced" "$(<"$CALL_LOG")"
 pass "picked from the menu, set authenticates once with pkexec and asks for a reboot"
 
 reset_fixture
