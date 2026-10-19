@@ -35,10 +35,14 @@ printf '$tool %s\n' "\$*" >> "\$CALL_LOG"
 SH
 done
 
-cat > "$scratch/bin/omarchy-boot-direct" <<'SH'
+# efibootmgr answers both halves, so root sees Direct Boot too.
+for dir in bin root-bin; do
+  cat > "$scratch/$dir/efibootmgr" <<'SH'
 #!/bin/bash
-[[ ${DIRECT_BOOT:-0} == "1" ]]
+printf 'BootCurrent: 0000\nBoot0000* Limine\tHD(1,GPT)/\\EFI\\limine\\limine_x64.efi\n'
+[[ ${DIRECT_BOOT:-0} == "0" ]] || printf 'Boot0001* Omarchy\tHD(1,GPT)/\\EFI\\Linux\\omarchy_linux-omarchy.efi\n'
 SH
+done
 
 # Root side: the rebuild writes a menu in BOOT_ORDER order, as limine-entry-tool does.
 cat > "$scratch/root-bin/limine-mkinitcpio" <<'SH'
@@ -174,3 +178,19 @@ fi
 cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a failed rebuild restores the previous boot order" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
 [[ $("$command" get) == "linux-omarchy-bore-o3-exp" ]] || fail "get still reports the previous default after a failed switch"
 pass "a failed rebuild leaves the previous default in place"
+
+reset_fixture
+if DIRECT_BOOT=1 as_root "$command" set linux 2> /dev/null; then
+  fail "root is refused under Direct Boot too"
+fi
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a refused root switch leaves the boot order alone"
+! grep -q '^limine-mkinitcpio' "$CALL_LOG" || fail "a refused root switch rebuilds nothing"
+pass "sudo omarchy-kernel set is refused under Direct Boot as well"
+
+reset_fixture
+if REBUILD_FAIL=1 MENU_ORDER="linux linux-omarchy-bore-o3-exp linux-omarchy" as_root "$command" set linux 2> /dev/null; then
+  fail "a rebuild that reorders the menu and then fails still fails the switch"
+fi
+grep -Fxq 'limine-mkinitcpio linux-omarchy-bore-o3-exp' "$CALL_LOG" || fail "the previous default is rebuilt to put it back in front" "$(<"$CALL_LOG")"
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "the previous boot order is restored"
+pass "a rebuild that fails after reordering the menu rebuilds the previous default"

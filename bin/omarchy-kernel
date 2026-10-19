@@ -115,13 +115,23 @@ first_menu_kernel() {
   done
 }
 
+# Direct Boot has the firmware load one UKI and skip Limine, so reordering the
+# boot menu would change nothing that boots. Read as omarchy-boot-direct does,
+# from efibootmgr directly, since root runs on a PATH without omarchy-*.
+direct_boot_active() {
+  efibootmgr 2>/dev/null | cut -f1 | grep -Eq '^Boot[0-9A-Fa-f]+\*[[:space:]]+Omarchy[[:space:]]*$'
+}
+
 # A switch that does not reach the boot menu puts the previous boot order back,
-# so neither get nor the next kernel update acts on a rejected choice.
+# so neither get nor the next kernel update acts on a rejected choice. A rebuild
+# can reorder the menu and fail afterwards in a post hook, so the previous
+# default is rebuilt too, which puts it back in front by the restored order.
 apply_kernel() {
-  local kernel=$1 backup
+  local kernel=$1 previous backup
 
   mkdir -p "$(dirname "$LIMINE_CONF")"
   touch "$LIMINE_CONF"
+  previous=$(default_kernel 2>/dev/null || true)
   backup=$(mktemp)
   cp "$LIMINE_CONF" "$backup"
 
@@ -136,6 +146,9 @@ apply_kernel() {
   else
     cat "$backup" >"$LIMINE_CONF"
     rm -f "$backup"
+    if [[ -n $previous && $previous != "$kernel" && $(first_menu_kernel) != "$previous" ]]; then
+      limine-mkinitcpio "$previous" || true
+    fi
     echo "Error: $kernel did not become the first boot entry; the previous boot order is restored." >&2
     exit 1
   fi
@@ -153,6 +166,14 @@ set_kernel() {
     exit 1
   fi
 
+  if direct_boot_active; then
+    echo "Error: Direct Boot skips the boot menu. Turn it off in Setup > Direct Boot to switch kernels." >&2
+    if (( EUID != 0 )) && [[ ! -t 0 ]]; then
+      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.directBoot)"
+    fi
+    exit 1
+  fi
+
   # The privileged half runs from the packaged copy when there is one, and from
   # the checkout's own otherwise (a bare dev checkout), behind the same prompt.
   # Root resolves nothing here: pkexec clears the environment it would need.
@@ -163,16 +184,6 @@ set_kernel() {
 
   local self=/usr/bin/omarchy-kernel
   [[ -x $self ]] || self=$OMARCHY_PATH/bin/omarchy-kernel
-
-  # Direct Boot has the firmware load one UKI and skip Limine, so reordering
-  # the boot menu would change nothing that boots.
-  if omarchy-boot-direct; then
-    echo "Error: Direct Boot skips the boot menu. Turn it off in Setup > Direct Boot to switch kernels." >&2
-    if [[ ! -t 0 ]]; then
-      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.directBoot)"
-    fi
-    exit 1
-  fi
 
   if [[ -t 0 ]]; then
     # A terminal can carry sudo's own password prompt.
