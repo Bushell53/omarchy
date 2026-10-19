@@ -169,7 +169,7 @@ set_kernel() {
   if direct_boot_active; then
     echo "Error: Direct Boot skips the boot menu. Turn it off in Setup > Direct Boot to switch kernels." >&2
     if (( EUID != 0 )) && [[ ! -t 0 ]]; then
-      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.directBoot)"
+      omarchy-notification-send -g  -u critical "$(omarchy-i18n kernel.directBoot)"
     fi
     exit 1
   fi
@@ -195,9 +195,9 @@ set_kernel() {
     # for the boot order and the rebuild together.
     if pkexec "$self" set "$kernel"; then
       omarchy-state set reboot-required
-      omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.newDefault)" "$kernel"
+      omarchy-notification-send -g  "$(omarchy-i18n kernel.newDefault)" "$kernel"
     else
-      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.switchFailed "$kernel")"
+      omarchy-notification-send -g  -u critical "$(omarchy-i18n kernel.switchFailed "$kernel")"
       exit 1
     fi
   fi
