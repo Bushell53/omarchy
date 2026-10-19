@@ -1,0 +1,182 @@
+#!/bin/bash
+
+# omarchy:summary=Show, list, or set the kernel Limine boots by default
+# omarchy:args=[get|list|set <kernel>]
+# omarchy:examples=omarchy kernel | omarchy kernel list | omarchy kernel set linux-omarchy
+# omarchy:requires-sudo=true
+
+set -euo pipefail
+
+# Root only rewrites the boot order and rebuilds one boot entry, all with
+# system tools, so pin PATH and keep it from resolving a helper out of a dev
+# checkout that a dev link may have put on sudo's secure_path. sudo and pkexec
+# both drop the caller's environment, so the override only reaches root from
+# root (the tests, in a user namespace).
+if (( EUID == 0 )); then
+  export PATH=${OMARCHY_KERNEL_ROOT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin}
+fi
+
+LIMINE_CONF="${OMARCHY_KERNEL_LIMINE_CONF:-/etc/default/limine}"
+LIMINE_DROP_INS="${OMARCHY_KERNEL_LIMINE_DROP_INS:-/etc/limine-entry-tool.d}"
+MODULES_DIR="${OMARCHY_KERNEL_MODULES_DIR:-/usr/lib/modules}"
+
+usage() { echo "Usage: omarchy-kernel [get|list|set <kernel>]"; }
+
+# Every kernel package records its pkgbase in its module tree, and that is the
+# name Limine's boot entries and BOOT_ORDER patterns refer to.
+installed_kernels() {
+  cat "$MODULES_DIR"/*/pkgbase 2>/dev/null | sort -u
+}
+
+# limine-entry-tool reads these in order and the last BOOT_ORDER wins, so
+# /etc/default/limine overrides every drop-in.
+boot_order() {
+  local file value order="*, *fallback, Snapshots"
+
+  for file in /usr/share/limine-entry-tool.d/*.conf /etc/limine-entry-tool.conf "$LIMINE_DROP_INS"/*.conf "$LIMINE_CONF"; do
+    [[ -r $file ]] || continue
+    value=$(sed -nE "s/^[[:space:]]*BOOT_ORDER[[:space:]]*=[[:space:]]*[\"']?([^\"']*)[\"']?[[:space:]]*$/\1/p" "$file" | tail -n1)
+    [[ -z $value ]] || order=$value
+  done
+
+  echo "$order"
+}
+
+boot_patterns() {
+  local pattern
+  local -a patterns
+
+  IFS=',' read -ra patterns <<<"$(boot_order)"
+  for pattern in "${patterns[@]}"; do
+    pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+    pattern="${pattern%"${pattern##*[![:space:]]}"}"
+    [[ -z $pattern ]] || echo "$pattern"
+  done
+}
+
+# The installed kernel the first matching BOOT_ORDER pattern picks.
+default_kernel() {
+  local pattern kernel
+  local -a kernels
+
+  mapfile -t kernels < <(installed_kernels)
+  while IFS= read -r pattern; do
+    for kernel in "${kernels[@]}"; do
+      if [[ $kernel == $pattern ]]; then
+        echo "$kernel"
+        return
+      fi
+    done
+  done < <(boot_patterns)
+}
+
+# Put the kernel first and keep the rest of the effective order behind it, so
+# hardware-specific preferences (linux-t2, fallback entries) still apply to
+# whatever is left. Every other BOOT_ORDER line in the central config goes,
+# since the last one read would win.
+write_boot_order() {
+  local kernel=$1 pattern order=$1
+
+  while IFS= read -r pattern; do
+    [[ $pattern == "$kernel" ]] || order+=", $pattern"
+  done < <(boot_patterns)
+
+  mkdir -p "$(dirname "$LIMINE_CONF")"
+  touch "$LIMINE_CONF"
+  sed -i -E '/^[[:space:]]*BOOT_ORDER[[:space:]]*=/d' "$LIMINE_CONF"
+  if [[ -s $LIMINE_CONF && $(tail -c1 "$LIMINE_CONF") != "" ]]; then
+    echo >>"$LIMINE_CONF"
+  fi
+  printf 'BOOT_ORDER="%s"\n' "$order" >>"$LIMINE_CONF"
+}
+
+# The first installed kernel in the boot menu, read from the tree lines that
+# sit directly under an OS entry ("├─ linux-omarchy").
+first_menu_kernel() {
+  local entry
+
+  while IFS= read -r entry; do
+    if installed_kernels | grep -Fxq -- "$entry"; then
+      echo "$entry"
+      return
+    fi
+  done < <(limine-entry-tool --tree | sed -nE 's/^(├|└)─ (.*)$/\2/p')
+}
+
+apply_kernel() {
+  local kernel=$1
+
+  write_boot_order "$kernel"
+
+  # Writing a boot entry rewrites limine.conf in BOOT_ORDER order, so
+  # rebuilding the chosen kernel alone reorders the menu without rebuilding
+  # every other kernel's image.
+  limine-mkinitcpio "$kernel"
+
+  # limine-mkinitcpio can report success after skipping a failed build.
+  if [[ $(first_menu_kernel) != "$kernel" ]]; then
+    echo "Error: $kernel is not the first entry in the boot menu; check the boot image build above." >&2
+    exit 1
+  fi
+}
+
+set_kernel() {
+  local kernel=${1:-}
+
+  if [[ -z $kernel ]]; then
+    usage >&2
+    exit 1
+  elif ! installed_kernels | grep -Fxq -- "$kernel"; then
+    echo "Error: $kernel is not an installed kernel." >&2
+    echo "Installed kernels: $(installed_kernels | paste -sd ' ')" >&2
+    exit 1
+  fi
+
+  # The privileged half runs from the packaged copy when there is one, and from
+  # the checkout's own otherwise (a bare dev checkout), behind the same prompt.
+  # Root resolves nothing here: pkexec clears the environment it would need.
+  if (( EUID == 0 )); then
+    apply_kernel "$kernel"
+    return
+  fi
+
+  local self=/usr/bin/omarchy-kernel
+  [[ -x $self ]] || self=$OMARCHY_PATH/bin/omarchy-kernel
+
+  if [[ -t 0 ]]; then
+    # A terminal can carry sudo's own password prompt.
+    sudo "$self" set "$kernel"
+    omarchy-state set reboot-required
+    echo "$kernel will boot after the next restart."
+  else
+    # Picked from the menu there is no terminal, so polkit asks on screen, once,
+    # for the boot order and the rebuild together.
+    omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.switching "$kernel")"
+    if pkexec "$self" set "$kernel"; then
+      omarchy-state set reboot-required
+      omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.switched "$kernel")"
+    else
+      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.switchFailed "$kernel")"
+      exit 1
+    fi
+  fi
+}
+
+case "${1:-get}" in
+  get)
+    default_kernel
+    ;;
+  list)
+    installed_kernels
+    ;;
+  set)
+    set_kernel "${2:-}"
+    ;;
+  -h | --help | help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
