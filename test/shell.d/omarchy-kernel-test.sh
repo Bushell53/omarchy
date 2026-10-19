@@ -120,7 +120,7 @@ grep -Fxq "pkexec $ROOT/bin/omarchy-kernel set linux-omarchy" "$CALL_LOG" || fai
 ! grep -q '^sudo ' "$CALL_LOG" || fail "the menu path has no terminal for sudo"
 grep -Fxq 'omarchy-state set reboot-required' "$CALL_LOG" || fail "a switch asks for a reboot"
 [[ $(grep -c '^omarchy-notification-send ' "$CALL_LOG") == "1" ]] || fail "only the finished switch is announced" "$(<"$CALL_LOG")"
-grep -Fxq 'omarchy-notification-send -g  New default Kernel linux-omarchy' "$CALL_LOG" || fail "the notification names the new default kernel" "$(<"$CALL_LOG")"
+grep -Fxq 'omarchy-notification-send -g  Now using linux-omarchy Reboot to use new default kernel --exec omarchy-system reboot' "$CALL_LOG" || fail "the notification names the kernel and reboots when clicked" "$(<"$CALL_LOG")"
 pass "picked from the menu, set authenticates once with pkexec and asks for a reboot"
 
 reset_fixture
