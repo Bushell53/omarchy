@@ -39,6 +39,7 @@ done
 cat > "$scratch/root-bin/limine-mkinitcpio" <<'SH'
 #!/bin/bash
 printf 'limine-mkinitcpio %s\n' "$*" >> "$CALL_LOG"
+[[ ${REBUILD_FAIL:-0} == "0" ]]
 SH
 cat > "$scratch/root-bin/limine-entry-tool" <<'SH'
 #!/bin/bash
@@ -82,6 +83,16 @@ printf '%s\n' "BOOT_ORDER='linux, *'" > "$scratch/drop-ins/zz-local.conf"
 printf '%s\n' 'BOOT_ORDER="linux-omarchy-*, *"' >> "$OMARCHY_KERNEL_LIMINE_CONF"
 [[ $("$command" get) == "linux-omarchy-bore-o3-exp" ]] || fail "the central config wins over drop-ins, and globs match"
 pass "get resolves the effective order the way limine-entry-tool reads it"
+
+reset_fixture
+install_kernels linux linux-omarchy-bore linux-omarchy-bore-o3-exp
+printf '%s\n' 'BOOT_ORDER="linux-omarchy-*, *"' >> "$OMARCHY_KERNEL_LIMINE_CONF"
+if "$command" get > "$scratch/output" 2> "$scratch/errors"; then
+  fail "a wildcard that matches several kernels cannot name the default"
+fi
+[[ ! -s $scratch/output ]] || fail "an ambiguous default prints no kernel, so no menu row is checked" "$(<"$scratch/output")"
+grep -Fq "matches linux-omarchy-bore linux-omarchy-bore-o3-exp" "$scratch/errors" || fail "the ambiguity names the kernels" "$(<"$scratch/errors")"
+pass "get does not guess between kernels a wildcard ties"
 
 reset_fixture
 if "$command" set linux-lts 2> "$scratch/output"; then
@@ -132,8 +143,18 @@ grep -Fxq 'BOOT_ORDER="linux-omarchy, linux-omarchy-bore-o3-exp, linux-omarchy-*
 pass "switching is idempotent"
 
 reset_fixture
+cp "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine"
 if MENU_ORDER="linux-omarchy-bore-o3-exp linux linux-omarchy" as_root "$command" set linux 2> "$scratch/output"; then
   fail "a menu that did not reorder fails the switch"
 fi
-grep -Fq "linux is not the first entry" "$scratch/output" || fail "the failure says the menu was not reordered" "$(<"$scratch/output")"
-pass "a skipped boot image build fails instead of reporting success"
+grep -Fq "linux did not become the first boot entry" "$scratch/output" || fail "the failure says the menu was not reordered" "$(<"$scratch/output")"
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a skipped build restores the previous boot order" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
+pass "a skipped boot image build fails and puts the previous boot order back"
+
+reset_fixture
+if REBUILD_FAIL=1 MENU_ORDER="linux linux-omarchy" as_root "$command" set linux 2> "$scratch/output"; then
+  fail "a failed rebuild fails the switch"
+fi
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a failed rebuild restores the previous boot order" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
+[[ $("$command" get) == "linux-omarchy-bore-o3-exp" ]] || fail "get still reports the previous default after a failed switch"
+pass "a failed rebuild leaves the previous default in place"

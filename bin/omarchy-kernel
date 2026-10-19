@@ -54,20 +54,31 @@ boot_patterns() {
   done
 }
 
-# The installed kernel the first matching BOOT_ORDER pattern picks.
+# The installed kernel the first matching BOOT_ORDER pattern picks. When that
+# pattern matches several kernels, their order in limine.conf decides, which
+# only root can read, so say so rather than guess.
 default_kernel() {
   local pattern kernel
-  local -a kernels
+  local -a kernels patterns matches
 
   mapfile -t kernels < <(installed_kernels)
-  while IFS= read -r pattern; do
+  mapfile -t patterns < <(boot_patterns)
+  for pattern in "${patterns[@]}"; do
+    matches=()
     for kernel in "${kernels[@]}"; do
       if [[ $kernel == $pattern ]]; then
-        echo "$kernel"
-        return
+        matches+=("$kernel")
       fi
     done
-  done < <(boot_patterns)
+
+    if (( ${#matches[@]} == 1 )); then
+      echo "${matches[0]}"
+      return
+    elif (( ${#matches[@]} > 1 )); then
+      echo "BOOT_ORDER pattern '$pattern' matches ${matches[*]}; their order in the boot menu decides which boots." >&2
+      return 1
+    fi
+  done
 }
 
 # Put the kernel first and keep the rest of the effective order behind it, so
@@ -81,8 +92,6 @@ write_boot_order() {
     [[ $pattern == "$kernel" ]] || order+=", $pattern"
   done < <(boot_patterns)
 
-  mkdir -p "$(dirname "$LIMINE_CONF")"
-  touch "$LIMINE_CONF"
   sed -i -E '/^[[:space:]]*BOOT_ORDER[[:space:]]*=/d' "$LIMINE_CONF"
   if [[ -s $LIMINE_CONF && $(tail -c1 "$LIMINE_CONF") != "" ]]; then
     echo >>"$LIMINE_CONF"
@@ -94,28 +103,40 @@ write_boot_order() {
 # sit directly under an OS entry ("├─ linux-omarchy").
 first_menu_kernel() {
   local entry
+  local -a kernels entries
 
-  while IFS= read -r entry; do
-    if installed_kernels | grep -Fxq -- "$entry"; then
+  mapfile -t kernels < <(installed_kernels)
+  mapfile -t entries < <(limine-entry-tool --tree | sed -nE 's/^(├|└)─ (.*)$/\2/p')
+  for entry in "${entries[@]}"; do
+    if printf '%s\n' "${kernels[@]}" | grep -Fxq -- "$entry"; then
       echo "$entry"
       return
     fi
-  done < <(limine-entry-tool --tree | sed -nE 's/^(├|└)─ (.*)$/\2/p')
+  done
 }
 
+# A switch that does not reach the boot menu puts the previous boot order back,
+# so neither get nor the next kernel update acts on a rejected choice.
 apply_kernel() {
-  local kernel=$1
+  local kernel=$1 backup
+
+  mkdir -p "$(dirname "$LIMINE_CONF")"
+  touch "$LIMINE_CONF"
+  backup=$(mktemp)
+  cp "$LIMINE_CONF" "$backup"
 
   write_boot_order "$kernel"
 
   # Writing a boot entry rewrites limine.conf in BOOT_ORDER order, so
   # rebuilding the chosen kernel alone reorders the menu without rebuilding
-  # every other kernel's image.
-  limine-mkinitcpio "$kernel"
-
-  # limine-mkinitcpio can report success after skipping a failed build.
-  if [[ $(first_menu_kernel) != "$kernel" ]]; then
-    echo "Error: $kernel is not the first entry in the boot menu; check the boot image build above." >&2
+  # every other kernel's image. limine-mkinitcpio can report success after
+  # skipping a failed build, hence the check on the menu itself.
+  if limine-mkinitcpio "$kernel" && [[ $(first_menu_kernel) == "$kernel" ]]; then
+    rm -f "$backup"
+  else
+    cat "$backup" >"$LIMINE_CONF"
+    rm -f "$backup"
+    echo "Error: $kernel did not become the first boot entry; the previous boot order is restored." >&2
     exit 1
   fi
 }
