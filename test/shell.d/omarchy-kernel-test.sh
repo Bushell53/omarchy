@@ -16,6 +16,7 @@ export OMARCHY_KERNEL_LIMINE_CONF="$scratch/limine"
 export OMARCHY_KERNEL_LIMINE_DROP_INS="$scratch/drop-ins"
 export OMARCHY_KERNEL_MODULES_DIR="$scratch/modules"
 export OMARCHY_KERNEL_ROOT_PATH="$scratch/root-bin:/usr/bin:/bin"
+export OMARCHY_KERNEL_LOCK="$scratch/lock"
 
 install_kernels() {
   local kernel
@@ -44,18 +45,33 @@ printf 'BootCurrent: 0000\nBoot0000* Limine\tHD(1,GPT)/\\EFI\\limine\\limine_x64
 SH
 done
 
-# Root side: the rebuild writes a menu in BOOT_ORDER order, as limine-entry-tool does.
+# Root side: the boot menu lives in a file. A rebuild moves its kernel to the
+# front, as limine-entry-tool's BOOT_ORDER sort does when that kernel leads the
+# order, unless the build is skipped; it can also fail afterwards, as a post
+# hook can, and can be slowed to overlap with another switch.
+export MENU_FILE="$scratch/menu"
 cat > "$scratch/root-bin/limine-mkinitcpio" <<'SH'
 #!/bin/bash
 printf 'limine-mkinitcpio %s\n' "$*" >> "$CALL_LOG"
-[[ ${REBUILD_FAIL:-0} == "0" ]]
+[[ $1 != "${SLOW_REBUILD:-}" ]] || sleep 1
+if [[ $1 != "${SKIP_REORDER:-}" ]]; then
+  { printf '%s\n' "$1"; grep -Fxv -- "$1" "$MENU_FILE"; } > "$MENU_FILE.new"
+  mv "$MENU_FILE.new" "$MENU_FILE"
+fi
+[[ $1 != "${FAIL_REBUILD:-}" ]]
 SH
 cat > "$scratch/root-bin/limine-entry-tool" <<'SH'
 #!/bin/bash
 [[ $* == "--tree" ]] || exit 99
 printf '%s\n' 'Omarchy'
-printf '├─ %s\n' ${MENU_ORDER:-linux-omarchy linux}
+sed 's/^/├─ /' "$MENU_FILE"
 printf '%s\n' '└─ Snapshots' '   └─ 52 │ 2026-10-19 20:33:31'
+SH
+# A rename that fails stands in for a disk that fills while staging the config.
+cat > "$scratch/root-bin/mv" <<'SH'
+#!/bin/bash
+[[ ${FAIL_STAGE:-0} == "0" ]] || exit 1
+exec /usr/bin/mv "$@"
 SH
 chmod +x "$scratch/bin/"* "$scratch/root-bin/"*
 
@@ -67,6 +83,8 @@ reset_fixture() {
 KERNEL_CMDLINE[default]+="root=/dev/mapper/root rw"
 BOOT_ORDER="linux-omarchy-bore-o3-exp, linux-omarchy, linux-omarchy-*, *, *fallback, Snapshots"
 CONF
+  cp "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine"
+  printf '%s\n' linux-omarchy-bore-o3-exp linux-omarchy linux > "$MENU_FILE"
 }
 
 as_root() {
@@ -146,26 +164,26 @@ if (( EUID != 0 )) && ! unshare --user --map-root-user true 2>/dev/null; then
 fi
 
 reset_fixture
-MENU_ORDER="linux linux-omarchy linux-omarchy-bore-o3-exp" as_root "$command" set linux
+as_root "$command" set linux
 [[ $(grep -c '^BOOT_ORDER=' "$OMARCHY_KERNEL_LIMINE_CONF") == "1" ]] || fail "one boot order remains"
 grep -Fxq 'BOOT_ORDER="linux, linux-omarchy-bore-o3-exp, linux-omarchy, linux-omarchy-*, *, *fallback, Snapshots"' "$OMARCHY_KERNEL_LIMINE_CONF" ||
   fail "the kernel goes first and the rest of the order follows" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
 grep -Fxq 'KERNEL_CMDLINE[default]+="root=/dev/mapper/root rw"' "$OMARCHY_KERNEL_LIMINE_CONF" || fail "the kernel cmdline is preserved"
-grep -Fxq 'limine-mkinitcpio linux' "$CALL_LOG" || fail "only the chosen kernel is rebuilt" "$(<"$CALL_LOG")"
+[[ $(<"$CALL_LOG") == "limine-mkinitcpio linux" ]] || fail "only the chosen kernel is rebuilt" "$(<"$CALL_LOG")"
 [[ $("$command" get) == "linux" ]] || fail "get reports the new default"
+[[ -z $(find "$scratch" -maxdepth 1 -name 'limine.*') ]] || fail "no staged config is left behind"
 pass "the root half puts the kernel first, keeps other settings, and rebuilds one kernel"
 
 reset_fixture
-MENU_ORDER="linux-omarchy linux linux-omarchy-bore-o3-exp" as_root "$command" set linux-omarchy
-MENU_ORDER="linux-omarchy linux linux-omarchy-bore-o3-exp" as_root "$command" set linux-omarchy
+as_root "$command" set linux-omarchy
+as_root "$command" set linux-omarchy
 grep -Fxq 'BOOT_ORDER="linux-omarchy, linux-omarchy-bore-o3-exp, linux-omarchy-*, *, *fallback, Snapshots"' "$OMARCHY_KERNEL_LIMINE_CONF" ||
   fail "setting the same kernel twice does not repeat it" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
 ! grep -q '^$' "$OMARCHY_KERNEL_LIMINE_CONF" || fail "repeated switches do not pile up blank lines"
 pass "switching is idempotent"
 
 reset_fixture
-cp "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine"
-if MENU_ORDER="linux-omarchy-bore-o3-exp linux linux-omarchy" as_root "$command" set linux 2> "$scratch/output"; then
+if SKIP_REORDER=linux as_root "$command" set linux 2> "$scratch/output"; then
   fail "a menu that did not reorder fails the switch"
 fi
 grep -Fq "linux did not become the first boot entry" "$scratch/output" || fail "the failure says the menu was not reordered" "$(<"$scratch/output")"
@@ -173,12 +191,46 @@ cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a skipp
 pass "a skipped boot image build fails and puts the previous boot order back"
 
 reset_fixture
-if REBUILD_FAIL=1 MENU_ORDER="linux linux-omarchy" as_root "$command" set linux 2> "$scratch/output"; then
-  fail "a failed rebuild fails the switch"
+if FAIL_REBUILD=linux as_root "$command" set linux 2> /dev/null; then
+  fail "a rebuild that reorders the menu and then fails still fails the switch"
 fi
-cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a failed rebuild restores the previous boot order" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "the previous boot order is restored"
+grep -Fxq 'limine-mkinitcpio linux-omarchy-bore-o3-exp' "$CALL_LOG" || fail "the previous menu leader is rebuilt" "$(<"$CALL_LOG")"
+[[ $(head -n1 "$MENU_FILE") == "linux-omarchy-bore-o3-exp" ]] || fail "the previous kernel leads the boot menu again" "$(<"$MENU_FILE")"
 [[ $("$command" get) == "linux-omarchy-bore-o3-exp" ]] || fail "get still reports the previous default after a failed switch"
-pass "a failed rebuild leaves the previous default in place"
+pass "a rebuild that fails after reordering the menu puts the previous kernel back in front"
+
+reset_fixture
+install_kernels linux linux-omarchy-bore linux-omarchy-bore-o3-exp
+printf '%s\n' 'BOOT_ORDER="linux-omarchy-*, *"' >> "$OMARCHY_KERNEL_LIMINE_CONF"
+cp "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine"
+printf '%s\n' linux-omarchy-bore linux-omarchy-bore-o3-exp linux > "$MENU_FILE"
+if FAIL_REBUILD=linux as_root "$command" set linux 2> /dev/null; then
+  fail "a failed switch fails even when the old default came from a wildcard tie"
+fi
+[[ $(head -n1 "$MENU_FILE") == "linux-omarchy-bore" ]] || fail "the kernel that led the menu is restored, though get could not name it" "$(<"$MENU_FILE")"
+pass "rollback restores the previous menu leader even when a wildcard tie hid the default"
+
+reset_fixture
+SLOW_REBUILD=linux FAIL_REBUILD=linux as_root "$command" set linux 2> /dev/null &
+first=$!
+sleep 0.3
+as_root "$command" set linux-omarchy
+wait "$first" && fail "the slow switch fails"
+grep -Fxq 'BOOT_ORDER="linux-omarchy, linux-omarchy-bore-o3-exp, linux-omarchy-*, *, *fallback, Snapshots"' "$OMARCHY_KERNEL_LIMINE_CONF" ||
+  fail "a failed switch cannot restore its backup over a later success" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
+[[ $(head -n1 "$MENU_FILE") == "linux-omarchy" ]] || fail "the later success leads the boot menu" "$(<"$MENU_FILE")"
+pass "overlapping switches run one at a time, so the last success wins"
+
+reset_fixture
+if FAIL_STAGE=1 as_root "$command" set linux 2> "$scratch/output"; then
+  fail "a config that cannot be written fails the switch"
+fi
+grep -Fq "the boot order is unchanged" "$scratch/output" || fail "the failure says nothing changed" "$(<"$scratch/output")"
+cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a failed write leaves the boot order in place" "$(<"$OMARCHY_KERNEL_LIMINE_CONF")"
+[[ -z $(find "$scratch" -maxdepth 1 -name 'limine.*') ]] || fail "the staged config is cleaned up"
+! grep -q '^limine-mkinitcpio' "$CALL_LOG" || fail "nothing is rebuilt after a failed write"
+pass "a failed write keeps the previous boot order instead of deleting it"
 
 reset_fixture
 if DIRECT_BOOT=1 as_root "$command" set linux 2> /dev/null; then
@@ -187,11 +239,3 @@ fi
 cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "a refused root switch leaves the boot order alone"
 ! grep -q '^limine-mkinitcpio' "$CALL_LOG" || fail "a refused root switch rebuilds nothing"
 pass "sudo omarchy-kernel set is refused under Direct Boot as well"
-
-reset_fixture
-if REBUILD_FAIL=1 MENU_ORDER="linux linux-omarchy-bore-o3-exp linux-omarchy" as_root "$command" set linux 2> /dev/null; then
-  fail "a rebuild that reorders the menu and then fails still fails the switch"
-fi
-grep -Fxq 'limine-mkinitcpio linux-omarchy-bore-o3-exp' "$CALL_LOG" || fail "the previous default is rebuilt to put it back in front" "$(<"$CALL_LOG")"
-cmp -s "$OMARCHY_KERNEL_LIMINE_CONF" "$scratch/original-limine" || fail "the previous boot order is restored"
-pass "a rebuild that fails after reordering the menu rebuilds the previous default"

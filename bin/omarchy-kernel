@@ -19,6 +19,7 @@ fi
 LIMINE_CONF="${OMARCHY_KERNEL_LIMINE_CONF:-/etc/default/limine}"
 LIMINE_DROP_INS="${OMARCHY_KERNEL_LIMINE_DROP_INS:-/etc/limine-entry-tool.d}"
 MODULES_DIR="${OMARCHY_KERNEL_MODULES_DIR:-/usr/lib/modules}"
+LOCK_FILE="${OMARCHY_KERNEL_LOCK:-/run/lock/omarchy-kernel.lock}"
 
 usage() { echo "Usage: omarchy-kernel [get|list|set <kernel>]"; }
 
@@ -86,17 +87,23 @@ default_kernel() {
 # whatever is left. Every other BOOT_ORDER line in the central config goes,
 # since the last one read would win.
 write_boot_order() {
-  local kernel=$1 pattern order=$1
+  local kernel=$1 pattern order=$1 staged
 
   while IFS= read -r pattern; do
     [[ $pattern == "$kernel" ]] || order+=", $pattern"
   done < <(boot_patterns)
 
-  sed -i -E '/^[[:space:]]*BOOT_ORDER[[:space:]]*=/d' "$LIMINE_CONF"
-  if [[ -s $LIMINE_CONF && $(tail -c1 "$LIMINE_CONF") != "" ]]; then
-    echo >>"$LIMINE_CONF"
+  # Staged beside the config and renamed over it, so a failed write (a full
+  # disk) leaves the old boot order in place rather than none.
+  staged=$(mktemp "$LIMINE_CONF.XXXXXX")
+  if { sed -E -e '/^[[:space:]]*BOOT_ORDER[[:space:]]*=/d' -e '$a\' "$LIMINE_CONF" && printf 'BOOT_ORDER="%s"\n' "$order"; } >"$staged" &&
+    chmod --reference="$LIMINE_CONF" "$staged" && mv -f "$staged" "$LIMINE_CONF"; then
+    return
   fi
-  printf 'BOOT_ORDER="%s"\n' "$order" >>"$LIMINE_CONF"
+
+  rm -f "$staged"
+  echo "Error: could not write $LIMINE_CONF; the boot order is unchanged." >&2
+  exit 1
 }
 
 # The first installed kernel in the boot menu, read from the tree lines that
@@ -124,14 +131,20 @@ direct_boot_active() {
 
 # A switch that does not reach the boot menu puts the previous boot order back,
 # so neither get nor the next kernel update acts on a rejected choice. A rebuild
-# can reorder the menu and fail afterwards in a post hook, so the previous
-# default is rebuilt too, which puts it back in front by the restored order.
+# can reorder the menu and fail afterwards in a post hook, so the kernel that
+# led the menu before is rebuilt too, which puts it back in front by the
+# restored order. Menu actions run detached, so switches take a lock: one that
+# fails must not restore its backup over another that has since succeeded.
 apply_kernel() {
-  local kernel=$1 previous backup
+  local kernel=$1 previous backup lock
+
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec {lock}>"$LOCK_FILE"
+  flock "$lock"
 
   mkdir -p "$(dirname "$LIMINE_CONF")"
   touch "$LIMINE_CONF"
-  previous=$(default_kernel 2>/dev/null || true)
+  previous=$(first_menu_kernel)
   backup=$(mktemp)
   cp "$LIMINE_CONF" "$backup"
 
