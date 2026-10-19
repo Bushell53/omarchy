@@ -195,7 +195,7 @@ set_kernel() {
     # for the boot order and the rebuild together.
     if pkexec "$self" set "$kernel"; then
       omarchy-state set reboot-required
-      omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.switched "$kernel")"
+      omarchy-notification-send -g 󰣇 "$(omarchy-i18n kernel.newDefault)" "$kernel"
     else
       omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.switchFailed "$kernel")"
       exit 1
