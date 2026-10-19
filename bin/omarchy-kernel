@@ -35,7 +35,7 @@ boot_order() {
 
   for file in /usr/share/limine-entry-tool.d/*.conf /etc/limine-entry-tool.conf "$LIMINE_DROP_INS"/*.conf "$LIMINE_CONF"; do
     [[ -r $file ]] || continue
-    value=$(sed -nE "s/^[[:space:]]*BOOT_ORDER[[:space:]]*=[[:space:]]*[\"']?([^\"']*)[\"']?[[:space:]]*$/\1/p" "$file" | tail -n1)
+    value=$(sed -nE "s/^[[:space:]]*BOOT_ORDER[[:space:]]*=[[:space:]]*[\"']?([^\"'#]*)[\"']?[[:space:]]*(#.*)?$/\1/p" "$file" | tail -n1)
     [[ -z $value ]] || order=$value
   done
 
@@ -163,6 +163,16 @@ set_kernel() {
 
   local self=/usr/bin/omarchy-kernel
   [[ -x $self ]] || self=$OMARCHY_PATH/bin/omarchy-kernel
+
+  # Direct Boot has the firmware load one UKI and skip Limine, so reordering
+  # the boot menu would change nothing that boots.
+  if omarchy-boot-direct; then
+    echo "Error: Direct Boot skips the boot menu. Turn it off in Setup > Direct Boot to switch kernels." >&2
+    if [[ ! -t 0 ]]; then
+      omarchy-notification-send -g 󰣇 -u critical "$(omarchy-i18n kernel.directBoot)"
+    fi
+    exit 1
+  fi
 
   if [[ -t 0 ]]; then
     # A terminal can carry sudo's own password prompt.

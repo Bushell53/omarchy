@@ -108,6 +108,7 @@
   "input.touchpadEnabled": "Touchpad enabled",
   "input.touchscreenDisabled": "Touchscreen disabled",
   "input.touchscreenEnabled": "Touchscreen enabled",
+  "kernel.directBoot": "Direct Boot skips the boot menu. Turn it off in Setup > Direct Boot to switch kernels.",
   "kernel.switchFailed": "Couldn't set %1 as the default kernel",
   "kernel.switched": "%1 will boot after the next restart",
   "keybindings.herdrTitle": "Herdr keybindings",

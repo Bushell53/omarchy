@@ -35,6 +35,11 @@ printf '$tool %s\n' "\$*" >> "\$CALL_LOG"
 SH
 done
 
+cat > "$scratch/bin/omarchy-boot-direct" <<'SH'
+#!/bin/bash
+[[ ${DIRECT_BOOT:-0} == "1" ]]
+SH
+
 # Root side: the rebuild writes a menu in BOOT_ORDER order, as limine-entry-tool does.
 cat > "$scratch/root-bin/limine-mkinitcpio" <<'SH'
 #!/bin/bash
@@ -72,6 +77,8 @@ reset_fixture
 [[ $("$command" list) == $'linux\nlinux-omarchy\nlinux-omarchy-bore-o3-exp' ]] || fail "list prints each installed kernel once"
 [[ $("$command" get) == "linux-omarchy-bore-o3-exp" ]] || fail "get reads the central boot order"
 [[ $("$command") == "linux-omarchy-bore-o3-exp" ]] || fail "get is the default verb"
+printf '%s\n' 'BOOT_ORDER="linux, *" # stock kernel for now' >> "$OMARCHY_KERNEL_LIMINE_CONF"
+[[ $("$command" get) == "linux" ]] || fail "an assignment with a trailing comment still counts"
 pass "list and get read installed kernels and the boot order"
 
 reset_fixture
@@ -110,6 +117,15 @@ grep -Fxq "pkexec $ROOT/bin/omarchy-kernel set linux-omarchy" "$CALL_LOG" || fai
 grep -Fxq 'omarchy-state set reboot-required' "$CALL_LOG" || fail "a switch asks for a reboot"
 [[ $(grep -c '^omarchy-notification-send ' "$CALL_LOG") == "1" ]] || fail "only the finished switch is announced" "$(<"$CALL_LOG")"
 pass "picked from the menu, set authenticates once with pkexec and asks for a reboot"
+
+reset_fixture
+if DIRECT_BOOT=1 "$command" set linux-omarchy < /dev/null 2> "$scratch/output"; then
+  fail "a switch is refused while Direct Boot bypasses the boot menu"
+fi
+! grep -Eq '^(pkexec|sudo|omarchy-state) ' "$CALL_LOG" || fail "Direct Boot refuses before any prompt or reboot request" "$(<"$CALL_LOG")"
+grep -Fq "Setup > Direct Boot" "$scratch/output" || fail "the refusal says how to turn Direct Boot off"
+grep -q '^omarchy-notification-send .*-u critical' "$CALL_LOG" || fail "picked from the menu, the refusal is a notification"
+pass "Direct Boot systems are told to turn it off instead of getting a switch that does nothing"
 
 reset_fixture
 if ESCALATION_FAIL=1 "$command" set linux-omarchy < /dev/null; then
