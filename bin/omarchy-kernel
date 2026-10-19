@@ -210,7 +210,7 @@ set_kernel() {
       omarchy-state set reboot-required
       omarchy-notification-send -g  -t 30000 "$(omarchy-i18n kernel.nowUsing "$kernel")" "$(omarchy-i18n kernel.rebootToUse)" --exec omarchy-system reboot
     else
-      omarchy-notification-send -g  -u critical "$(omarchy-i18n kernel.switchFailed "$kernel")"
+      omarchy-notification-send -g  -u critical -t 30000 "$(omarchy-i18n kernel.switchFailed "$kernel")" "$(omarchy-i18n kernel.retryInTerminal)" --exec omarchy-launch-floating-terminal-with-presentation "omarchy-kernel set $kernel"
       exit 1
     fi
   fi

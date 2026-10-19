@@ -155,7 +155,8 @@ if ESCALATION_FAIL=1 "$command" set linux-omarchy < /dev/null; then
   fail "a cancelled prompt fails the switch"
 fi
 ! grep -q '^omarchy-state ' "$CALL_LOG" || fail "a cancelled switch does not ask for a reboot"
-grep -q '^omarchy-notification-send .*-u critical' "$CALL_LOG" || fail "a cancelled switch says so" "$(<"$CALL_LOG")"
+grep -Fxq "omarchy-notification-send -g  -u critical -t 30000 Couldn't switch to linux-omarchy Retry in a terminal --exec omarchy-launch-floating-terminal-with-presentation omarchy-kernel set linux-omarchy" "$CALL_LOG" ||
+  fail "a failed switch says so like a success does, and retries in a terminal when clicked" "$(<"$CALL_LOG")"
 pass "a cancelled or failed pkexec leaves no reboot request"
 
 if (( EUID != 0 )) && ! unshare --user --map-root-user true 2>/dev/null; then
