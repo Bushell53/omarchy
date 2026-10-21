@@ -65,6 +65,7 @@ const manifest = JSON.parse(fs.readFileSync(root + '/shell/plugins/agents/manife
 assert(manifest.kinds.includes('service') && manifest.entryPoints.service === 'Main.qml', 'usage polling runs as one service per shell')
 assert(!/^\s*Main \{/m.test(panelSource) && /firstPartyServiceFor\("omarchy\.agents"\)/.test(panelSource), 'every bar reads the shared usage service instead of polling on its own')
 assert(/running: root\.settings !== null/.test(mainSource), 'the first poll waits for the widget settings')
+assert(/function runUpdate\(kind, agentIds\) \{[^}]*if \(root\.settings === null\) return/.test(mainSource), 'no poll of any kind runs without widget settings, retries included')
 const catcherSource = fs.readFileSync(root + '/shell/Ui/PanelKeyCatcher.qml', 'utf8')
 assert(/if \(reorderable && \(event\.modifiers & Qt\.ControlModifier\)\)/.test(catcherSource), 'only panels that ask for it turn Ctrl+Up/Down into a reorder')
 assert(/if \(\["account", "autoswitch", "signin"\]\.indexOf\(target\.kind\) < 0\) return -1/.test(panelSource), 'Ctrl+Up/Down does nothing outside an agent')

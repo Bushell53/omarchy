@@ -191,6 +191,10 @@ Item {
   }
 
   function runUpdate(kind, agentIds) {
+    // The service outlives a widget taken off every bar, and then no panel
+    // hands it settings. Every poll comes through here (the refresh timer,
+    // the limits retry, a queued rerun), so this one guard stops them all.
+    if (root.settings === null) return
     if (updateProcess.running) {
       // Collapse queued requests to one full rerun; a forced refresh outranks
       // the cheaper kinds it might have been queued behind.
