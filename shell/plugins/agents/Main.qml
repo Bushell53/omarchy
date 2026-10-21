@@ -11,7 +11,11 @@ Item {
   id: root
   visible: false
 
-  property var settings: ({})
+  // The shell creates this once as the plugin's service, and every bar's
+  // panel hands it the widget settings. Null until the first one does, so
+  // the first poll can't run against defaults that re-enable a switched-off
+  // provider.
+  property var settings: null
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string usageDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/omarchy/agents/usage"
@@ -147,7 +151,7 @@ Item {
 
   Timer {
     interval: root.nearLimit ? Math.min(180, root.refreshIntervalSec) * 1000 : root.refreshIntervalSec * 1000
-    running: true
+    running: root.settings !== null
     repeat: true
     triggeredOnStart: true
     onTriggered: root.runUpdate(root.nearLimit ? "limits" : "normal")
