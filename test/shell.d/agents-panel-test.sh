@@ -66,6 +66,8 @@ assert(manifest.kinds.includes('service') && manifest.entryPoints.service === 'M
 assert(!/^\s*Main \{/m.test(panelSource) && /firstPartyServiceFor\("omarchy\.agents"\)/.test(panelSource), 'every bar reads the shared usage service instead of polling on its own')
 assert(/running: root\.settings !== null/.test(mainSource), 'the first poll waits for the widget settings')
 assert(/function runUpdate\(kind, agentIds\) \{[^}]*if \(root\.settings === null\) return/.test(mainSource), 'no poll of any kind runs without widget settings, retries included')
+assert(/property var settings: panels\.length > 0 \? panels\[panels\.length - 1\]\.settings : null/.test(mainSource) && !/^\s*Binding \{/m.test(panelSource), 'the poll takes its settings from the panels still on a bar')
+assert(/Component\.onDestruction: attachUsage\(null\)/.test(panelSource) && /if \(attachedUsage\) attachedUsage\.detachPanel\(root\)/.test(panelSource), 'taking the widget off the last bar stops the poll')
 const catcherSource = fs.readFileSync(root + '/shell/Ui/PanelKeyCatcher.qml', 'utf8')
 assert(/if \(reorderable && \(event\.modifiers & Qt\.ControlModifier\)\)/.test(catcherSource), 'only panels that ask for it turn Ctrl+Up/Down into a reorder')
 assert(/if \(\["account", "autoswitch", "signin"\]\.indexOf\(target\.kind\) < 0\) return -1/.test(panelSource), 'Ctrl+Up/Down does nothing outside an agent')

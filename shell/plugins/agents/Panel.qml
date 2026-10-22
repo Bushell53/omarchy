@@ -880,12 +880,20 @@ Panel {
     Qt.callLater(function() { if (panel.loadedContent) panel.loadedContent.forceActiveFocus() })
   }
 
-  Binding {
-    target: root.usage
-    property: "settings"
-    value: root.settings
-    when: root.usage !== null
+  // A Binding to the service's settings would outlive this panel: Qt leaves
+  // the last value behind, and the shared poll kept running with no widget.
+  property var attachedUsage: null
+
+  function attachUsage(next) {
+    if (attachedUsage === next) return
+    if (attachedUsage) attachedUsage.detachPanel(root)
+    attachedUsage = next
+    if (next) next.attachPanel(root)
   }
+
+  onUsageChanged: attachUsage(usage)
+  Component.onCompleted: attachUsage(usage)
+  Component.onDestruction: attachUsage(null)
 
   Process {
     id: checkProcess

@@ -12,10 +12,19 @@ Item {
   visible: false
 
   // The shell creates this once as the plugin's service, and every bar's
-  // panel hands it the widget settings. Null until the first one does, so
-  // the first poll can't run against defaults that re-enable a switched-off
-  // provider.
-  property var settings: null
+  // panel attaches to it. Settings come from the panels still attached, and
+  // are null while none is, so nothing polls before the first arrives or
+  // after the widget leaves the last bar.
+  property var panels: []
+  property var settings: panels.length > 0 ? panels[panels.length - 1].settings : null
+
+  function attachPanel(panel) {
+    if (panels.indexOf(panel) < 0) panels = panels.concat([panel])
+  }
+
+  function detachPanel(panel) {
+    panels = panels.filter(function(p) { return p !== panel })
+  }
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string usageDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/omarchy/agents/usage"
